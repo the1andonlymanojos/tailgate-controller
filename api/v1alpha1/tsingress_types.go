@@ -44,6 +44,8 @@ type TSIngressSpec struct {
 // TSIngressStatus defines the observed state of TSIngress.
 type TSIngressStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+	Initialized bool   `json:"initialized,omitempty"`
+	State       string `json:"state,omitempty"`
 	// Important: Run "make" to regenerate code after modifying this file
 }
 

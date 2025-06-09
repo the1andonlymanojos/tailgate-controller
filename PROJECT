@@ -6,6 +6,8 @@ cliVersion: 4.6.0
 domain: tailgate.run
 layout:
 - go.kubebuilder.io/v4
+plugins:
+  helm.kubebuilder.io/v1-alpha: {}
 projectName: tailgate-controller
 repo: github.com/the1andonlymanojos/tailgate-controller
 resources:

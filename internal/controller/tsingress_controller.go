@@ -85,7 +85,6 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Error reading the object - requeue the request.
 		return ctrl.Result{}, err
 	}
-
 	// 3. FINALIZER MANAGEMENT
 	finalizerName := "tailscale.tailgate.run/finalizer"
 
@@ -201,11 +200,7 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	proxyDeploymentName := tsIngress.Name + "-proxy"
 
-	var deploy appsv1.Deployment
-
-	err = r.Get(ctx, types.NamespacedName{Name: proxyDeploymentName, Namespace: tsIngress.Namespace}, &deploy)
-
-	if err != nil && apierrors.IsNotFound(err) {
+	if !tsIngress.Status.Initialized {
 		logger.Info("Proxy deployment not found, creating", "name", proxyDeploymentName)
 
 		//check if tsIngress.Spec.Hostname[0] is already in the tailnet
@@ -340,7 +335,7 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, err
 		}
 
-		deploy = appsv1.Deployment{
+		deploy := appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      proxyDeploymentName,
 				Namespace: tsIngress.Namespace,
@@ -441,8 +436,11 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// }
 
 	// 6. Return and requeue if needed
+	tsIngress.Status.Initialized = true
 	return ctrl.Result{}, nil
 }
+
+// if initialised, check if deployment is healthy, PVC is fine, basically everything else.
 
 // Utility functions to check/remove strings from slice
 
