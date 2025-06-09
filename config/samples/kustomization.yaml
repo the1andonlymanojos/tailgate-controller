@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- tailscale_v1alpha1_tsingress.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

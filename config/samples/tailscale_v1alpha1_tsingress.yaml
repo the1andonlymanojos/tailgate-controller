@@ -1,0 +1,9 @@
+apiVersion: tailscale.tailgate.run/v1alpha1
+kind: TSIngress
+metadata:
+  labels:
+    app.kubernetes.io/name: tailgate-controller
+    app.kubernetes.io/managed-by: kustomize
+  name: tsingress-sample
+spec:
+  # TODO(user): Add fields here
