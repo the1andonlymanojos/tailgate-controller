@@ -17,28 +17,64 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// ProxyRule defines a single proxy forwarding rule
+type ProxyRule struct {
+	Protocol    string `json:"protocol,omitempty"`
+	ListenPort  int    `json:"listenPort,omitempty"`
+	BackendPort int    `json:"backendPort,omitempty"`
+	Funnel      bool   `json:"funnel,omitempty"`
+}
+
 // TSIngressSpec defines the desired state of TSIngress.
 type TSIngressSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	BackendService string   `json:"backendService,omitempty"`
-	Protocol       string   `json:"protocol,omitempty"`
-	Ports          []int    `json:"ports,omitempty"`
-	ListenPorts    []int    `json:"listenPorts,omitempty"`
-	Hostname       []string `json:"hostnames,omitempty"`
-	Ephemeral      bool     `json:"ephemeral,omitempty"`
-	UpdateDNS      bool     `json:"updateDNS,omitempty"`
-	Domain         string   `json:"subdomain,omitempty"`
-	DNSName        string   `json:"dnsName,omitempty"`
-	TailnetName    string   `json:"tailnetName,omitempty"`
-	// Foo is an example field of TSIngress. Edit tsingress_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// Backend configuration
+	BackendService string `json:"backendService,omitempty"`
+
+	// Proxy rules configuration
+	ProxyRules []ProxyRule `json:"proxyRules,omitempty"`
+
+	// DNS and domain configuration
+	Hostname  []string `json:"hostnames,omitempty"`
+	Domain    string   `json:"subdomain,omitempty"`
+	DNSName   string   `json:"dnsName,omitempty"`
+	UpdateDNS bool     `json:"updateDNS,omitempty"`
+
+	// Tailscale configuration
+	TailnetName string `json:"tailnetName,omitempty"`
+	Ephemeral   bool   `json:"ephemeral,omitempty"`
+}
+
+// Validate validates the TSIngressSpec
+func (s *TSIngressSpec) Validate() error {
+	// Check for unique listen ports
+	portMap := make(map[int]bool)
+	for _, rule := range s.ProxyRules {
+		if portMap[rule.ListenPort] {
+			return fmt.Errorf("duplicate listen port: %d", rule.ListenPort)
+		}
+		portMap[rule.ListenPort] = true
+
+		// Validate funnel ports
+		if rule.Funnel {
+			validFunnelPorts := map[int]bool{
+				443:   true, // HTTPS
+				3306:  true, // MySQL
+				10000: true, // Custom port
+			}
+			if !validFunnelPorts[rule.ListenPort] {
+				return fmt.Errorf("invalid funnel port: %d. Valid funnel ports are: 443, 3306, 10000", rule.ListenPort)
+			}
+		}
+	}
+	return nil
 }
 
 // TSIngressStatus defines the observed state of TSIngress.

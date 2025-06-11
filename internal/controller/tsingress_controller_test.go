@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -93,9 +92,21 @@ func TestGenerateConfigFromTSIngress(t *testing.T) {
 		},
 		Spec: tailscalev1alpha1.TSIngressSpec{
 			BackendService: "my-backend",
-			Protocol:       "tcp",
-			Ports:          []int{8080, 9090},
-			ListenPorts:    []int{443, 80},
+			Hostname:       []string{"my-ingress"},
+			ProxyRules: []tailscalev1alpha1.ProxyRule{
+				{
+					Protocol:    "tcp",
+					ListenPort:  443,
+					BackendPort: 8080,
+					Funnel:      true,
+				},
+				{
+					Protocol:    "tcp",
+					ListenPort:  80,
+					BackendPort: 9090,
+					Funnel:      false,
+				},
+			},
 		},
 	}
 
@@ -105,24 +116,96 @@ func TestGenerateConfigFromTSIngress(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected :=
-		`tailscale:
+	expected := `tailscale:
   auth_key: "tskey-auth-fakekey"
   hostname: "my-ingress"
-  state_dir: ""
+  state_dir: "/var/lib/tailgate"
 
 proxies:
 - protocol: "tcp"
   listen_addr: ":443"
   backend_addr: "my-backend.test-namespace.svc.cluster.local:8080"
-  funnel: false
+  funnel: true
 - protocol: "tcp"
   listen_addr: ":80"
   backend_addr: "my-backend.test-namespace.svc.cluster.local:9090"
   funnel: false
 `
 
-	if strings.TrimSpace(got) != strings.TrimSpace(expected) {
-		t.Errorf("expected:\n%s\ngot:\n%s", expected, got)
+	if got != expected {
+		t.Errorf("GenerateConfigFromTSIngress() = %v, want %v", got, expected)
+	}
+}
+
+// Add test for validation
+func TestTSIngressSpecValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    tailscalev1alpha1.TSIngressSpec
+		wantErr bool
+	}{
+		{
+			name: "valid configuration",
+			spec: tailscalev1alpha1.TSIngressSpec{
+				ProxyRules: []tailscalev1alpha1.ProxyRule{
+					{
+						Protocol:    "tcp",
+						ListenPort:  443,
+						BackendPort: 8080,
+						Funnel:      true,
+					},
+					{
+						Protocol:    "tcp",
+						ListenPort:  80,
+						BackendPort: 9090,
+						Funnel:      false,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "duplicate listen ports",
+			spec: tailscalev1alpha1.TSIngressSpec{
+				ProxyRules: []tailscalev1alpha1.ProxyRule{
+					{
+						Protocol:    "tcp",
+						ListenPort:  443,
+						BackendPort: 8080,
+						Funnel:      true,
+					},
+					{
+						Protocol:    "tcp",
+						ListenPort:  443,
+						BackendPort: 9090,
+						Funnel:      false,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid funnel port",
+			spec: tailscalev1alpha1.TSIngressSpec{
+				ProxyRules: []tailscalev1alpha1.ProxyRule{
+					{
+						Protocol:    "tcp",
+						ListenPort:  8080,
+						BackendPort: 8080,
+						Funnel:      true,
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.spec.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("TSIngressSpec.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }

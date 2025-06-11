@@ -68,7 +68,6 @@ type TSIngressReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-
 	logger := logf.FromContext(ctx)
 
 	logger.Info("Function called")
@@ -78,13 +77,18 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	err := r.Get(ctx, req.NamespacedName, &tsIngress)
 	if err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			// 2. CR not found => it was deleted, cleanup already done by finalizer logic
 			logger.Info("TSIngress resource deleted", "name", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
-		// Error reading the object - requeue the request.
 		return ctrl.Result{}, err
 	}
+
+	// Validate the TSIngress spec
+	if err := tsIngress.Spec.Validate(); err != nil {
+		logger.Error(err, "Invalid TSIngress spec")
+		return ctrl.Result{}, err
+	}
+
 	// 3. FINALIZER MANAGEMENT
 	finalizerName := "tailscale.tailgate.run/finalizer"
 
@@ -252,27 +256,12 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			logger.Error(err, "Failed to get backend service")
 			return ctrl.Result{}, err
 		}
-		//validate ports
-		if len(tsIngress.Spec.Ports) == 0 {
-			logger.Error(err, "No ports specified")
-			return ctrl.Result{}, err
-		}
-		if len(tsIngress.Spec.ListenPorts) == 0 {
-			logger.Error(err, "No listen ports specified")
-		}
-		if len(tsIngress.Spec.ListenPorts) != len(tsIngress.Spec.Ports) {
-			logger.Error(err, "listenPorts and ports must have the same length")
-			return ctrl.Result{}, err
-		}
 
-		//check ports on backend service
-		if backendService.Spec.Ports == nil {
-			logger.Error(err, "No ports specified on backend service")
-			return ctrl.Result{}, err
-		}
-		for _, port := range tsIngress.Spec.Ports {
-			if !containsPort(backendService.Spec.Ports, port) {
-				logger.Error(err, "Port not found on backend service")
+		// Validate backend ports
+		for _, rule := range tsIngress.Spec.ProxyRules {
+			if !containsPort(backendService.Spec.Ports, rule.BackendPort) {
+				err := fmt.Errorf("backend port %d not found on service %s", rule.BackendPort, tsIngress.Spec.BackendService)
+				logger.Error(err, "Invalid backend port")
 				return ctrl.Result{}, err
 			}
 		}
@@ -474,31 +463,18 @@ func ptrToInt32(i int32) *int32 {
 
 func GenerateConfigFromTSIngress(tsIngress tailscalev1alpha1.TSIngress, authKey string) (string, error) {
 	hostname := tsIngress.Spec.Hostname[0]
-
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("tailscale:\n  auth_key: \"%s\"\n  hostname: \"%s\"\n  state_dir: \"/var/lib/tailgate\"\n\nproxies:\n", authKey, hostname))
-
-	// If Ports is empty, assume default 443
-	ports := tsIngress.Spec.Ports
-	listenPorts := tsIngress.Spec.ListenPorts
-	if len(listenPorts) != len(ports) {
-		return "", fmt.Errorf("listenPorts and ports must have the same length")
-	}
-	if len(ports) == 0 {
-		ports = []int{443}
-	}
-
-	protocol := tsIngress.Spec.Protocol
-	if protocol == "" {
-		protocol = "tcp"
-	}
-
 	backendAddr := fmt.Sprintf("%s.%s.svc.cluster.local", tsIngress.Spec.BackendService, tsIngress.Namespace)
 
-	for i, port := range listenPorts {
-		fmt.Println("afjdalkfjsdlfsadlkfjkjhgjkhgjhkgjkdalskjf", backendAddr)
-		sb.WriteString(fmt.Sprintf("- protocol: \"%s\"\n  listen_addr: \":%d\"\n  backend_addr: \"%s:%d\"\n  funnel: false\n", protocol, port, backendAddr, ports[i]))
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("tailscale:\n  auth_key: \"%s\"\n  hostname: \"%s\"\n  state_dir: \"/var/lib/tailgate\"\n\nproxies:\n", authKey, hostname))
+
+	for _, rule := range tsIngress.Spec.ProxyRules {
+		protocol := rule.Protocol
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		sb.WriteString(fmt.Sprintf("- protocol: \"%s\"\n  listen_addr: \":%d\"\n  backend_addr: \"%s:%d\"\n  funnel: %v\n",
+			protocol, rule.ListenPort, backendAddr, rule.BackendPort, rule.Funnel))
 	}
 
 	return sb.String(), nil
