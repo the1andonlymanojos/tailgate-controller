@@ -1,135 +1,233 @@
-# tailgate-controller
-// TODO(user): Add simple overview of use/purpose
+# Tailgate Controller
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+> ⚠️ Ingress is broken. You just didn’t realize it yet.
 
-## Getting Started
+### Why?
 
-### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+If you're running a homelab and want to share access to something, you’ve basically got two options:
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+1. Get a public IP, deal with port forwarding, dynamic DNS, your ISP blocking stuff, or paying extra for a static IP.
+2. Use Tailscale and share access to one of your nodes.
 
-```sh
-make docker-build docker-push IMG=<some-registry>/tailgate-controller:tag
+The problem? Sharing a Tailscale node shares *everything* on that machine. Every open port, every service. Yeah, you can do ACLs and routing... *if* you’re on the Pro plan. But most of us are not paying \$5/user/month to share Plex with a friend.
+
+**That’s where Tailgate comes in.**
+
+This Kubernetes controller gives you a Tailscale node *per-service*, so you can expose *just* the thing you want — and nothing else. Creepy Karthik can watch your Plex, but he’s not getting anywhere near your NAS, dev cluster, or dashboard.
+
+---
+
+## Table of Contents
+
+* [Why Tailgate?](#why-tailgate)
+* [Use Cases](#use-cases)
+
+  * [Plex for Creepy Karthik](#1-plex-for-creepy-karthik)
+  * [Photo Server for Family](#2-photo-server-for-family)
+  * [Dev Access for Contractors](#3-dev-access-for-contractors)
+* [Features](#features)
+* [Prerequisites](#prerequisites)
+* [Installation](#installation)
+* [Configuration](#configuration)
+
+  * [TSIngress Spec](#tsingress-spec)
+  * [Proxy Rules](#proxy-rules)
+* [Security Considerations](#security-considerations)
+* [Troubleshooting](#troubleshooting)
+* [Contributing](#contributing)
+* [License](#license)
+
+---
+
+## Why Tailgate?
+
+Because typical ingress sucks when it comes to security:
+
+* **Traditional ingress controllers** route based on headers (like Host), which are trivial to spoof.
+* **Tailscale node sharing** gives access to everything, unless you go full Pro and configure ACLs properly.
+* **Public IPs** are annoying or expensive, and many ISPs block ports or double-NAT you anyway.
+
+Tailgate fixes all of this:
+
+* 🔒 Gives you a *dedicated* Tailscale node per-service
+* 🔌 Only exposes the service you specify — no port scanning, no lateral movement
+* 🧠 Works with the **free** Tailscale plan
+* 🚀 Supports **Funnel** for public access — even if your ISP sucks
+* 💬 No need for complicated ACLs or manual Tailscale node juggling
+* 🎯 Use well-known Funnel ports (443, 8443, or 10000) — works even for Grandma
+
+Also unlike using Funnel directly, Tailgate lets you expose *any* internal port using those limited public ones. So if you've got Redis running on port 6379, you can easily forward it through 443, and on the client just use port 443 — it Just Works™.
+
+---
+
+## Use Cases
+
+### 1. Plex for Creepy Karthik
+
+Karthik wants to watch movies on your Plex. You’re cool with that. What you’re *not* cool with is him trying to poke around your NAS or Home Assistant setup.
+
+```yaml
+apiVersion: tailscale.tailgate.run/v1alpha1
+kind: TSIngress
+metadata:
+  name: plex-for-karthik
+  namespace: media
+spec:
+  backendService: plex
+  proxyRules:
+    - protocol: tcp
+      listenPort: 32400
+      backendPort: 32400
+      funnel: false
+  hostnames:
+    - plex-karthik
+  tailnetName: your-tailnet.ts.net
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+Now he only sees Plex. Even if he gets your login creds, he can’t do anything else — because the *node he sees doesn’t have access to anything else*. Zero-trust, literally.
 
-**Install the CRDs into the cluster:**
+### 2. Photo Server for Family
 
-```sh
-make install
+You want to share Immich with your parents. They aren’t installing Tailscale or dealing with VPNs. You just want to send them a link that works.
+
+```yaml
+apiVersion: tailscale.tailgate.run/v1alpha1
+kind: TSIngress
+metadata:
+  name: immich-parents
+  namespace: photos
+spec:
+  backendService: immich
+  proxyRules:
+    - protocol: tcp
+      listenPort: 443
+      backendPort: 3001
+      funnel: true
+  hostnames:
+    - family-photos
+  tailnetName: your-tailnet.ts.net
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+With **Funnel** enabled and using one of the public ports (443/8443/10000), they can access your service via a simple link. No VPN, no app install, no tech support required.
 
-```sh
-make deploy IMG=<some-registry>/tailgate-controller:tag
+### 3. Dev Access for Contractors
+
+You’ve got external folks who need to hit `dev-api`. You *don’t* want them anywhere near staging, production, or other internal tools.
+
+```yaml
+apiVersion: tailscale.tailgate.run/v1alpha1
+kind: TSIngress
+metadata:
+  name: dev-access
+  namespace: development
+spec:
+  backendService: dev-api
+  proxyRules:
+    - protocol: tcp
+      listenPort: 443
+      backendPort: 8080
+      funnel: false
+  hostnames:
+    - dev-api
+  tailnetName: your-tailnet.ts.net
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+Give them access to that Tailscale node only. Done. They can’t even *see* your other services.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+---
 
-```sh
-kubectl apply -k config/samples/
-```
+## Features
 
->**NOTE**: Ensure that the samples has default values to test it out.
+* ✅ One Tailscale node per service
+* ✅ Share specific services securely
+* ✅ Optional Funnel support for public URLs
+* ✅ Works without Tailscale Pro
+* ✅ Any port forwarding (not just 443/3306)
+* ✅ Built for K8s homelabbers
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+---
 
-```sh
-kubectl delete -k config/samples/
-```
+## Prerequisites
 
-**Delete the APIs(CRDs) from the cluster:**
+* Kubernetes cluster
+* Tailscale account (free works!)
+* `kubectl` configured
+* Docker (for local builds, optional)
+* Go (for dev work)
 
-```sh
-make uninstall
-```
+---
 
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
+## Installation
 
 ```sh
-make build-installer IMG=<some-registry>/tailgate-controller:tag
+helm install tailgate-controller tailgate/tailgate-controller \
+  --namespace tailgate-controller-system \
+  --create-namespace \
+  --set auth.tailscale.data.TAILSCALE_CLIENT_ID=your-client-id \
+  --set auth.tailscale.data.TAILSCALE_CLIENT_SECRET=your-client-secret
 ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+---
 
-2. Using the installer
+## Configuration
 
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
+### TSIngress Spec
 
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/tailgate-controller/<tag or branch>/dist/install.yaml
-```
+| Field            | Type    | Description                           |
+| ---------------- | ------- | ------------------------------------- |
+| `backendService` | string  | Kubernetes service to expose          |
+| `proxyRules`     | array   | See below                             |
+| `hostname`      | array   | Hostname for the Tailscale node (array of strings was a mistake, only pass one string please)     |
+| `tailnetName`    | string  | Your tailnet (e.g. `yourname.ts.net`) |
+| `ephemeral`      | boolean | Use ephemeral auth keys (optional)    |
+| `updateDNS`      | boolean | Automatically manage DNS (optional)   |
+| `domain`         | string  | DNS domain (if `updateDNS` is true)   |
+| `dnsName`        | string  | DNS prefix (optional)                 |
 
-### By providing a Helm Chart
+### Proxy Rules
 
-1. Build the chart using the optional helm plugin
+| Field         | Type   | Description                             |
+| ------------- | ------ | --------------------------------------- |
+| `protocol`    | string | `tcp` ( `udp` is still a work in progress)                         |
+| `listenPort`  | int    | Port the Tailscale node listens on      |
+| `backendPort` | int    | Port inside your cluster it forwards to |
+| `funnel`      | bool   | Should this rule go through Funnel?     |
 
-```sh
-kubebuilder edit --plugins=helm/v1-alpha
-```
+---
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+## Security Considerations
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+* Every TSIngress is a new, isolated Tailscale node
+* No lateral movement across services
+* Works great even if someone steals your Tailscale login
+* Funnel gives temporary, limited public access
+* No TLS or header spoofing attacks possible
+* Public ports (443, 8443, 10000) allow you to serve anything from anywhere
+
+---
+
+## Troubleshooting
+
+**Service not accessible?**
+
+* Check the `TSIngress` status
+* Make sure your backend service is up
+* Confirm Tailscale auth worked (check logs)
+
+**Funnel not working?**
+
+* You need to enable Funnel in the Tailscale dashboard
+* Funnel supports public access on ports 443, 8443, and 10000
+* Tailgate lets you forward *any* internal port through one of those externally, even if your app isn't normally web-friendly
+
+---
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+PRs welcome! This is still early days, so expect rough edges. If it’s broken or missing something, open an issue or fix it yourself and send a PR.
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+---
 
 ## License
 
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Apache 2.0. Use it, fork it, do what you want — just don’t sell it as-is without giving credit.
