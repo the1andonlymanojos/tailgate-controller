@@ -36,3 +36,6 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: manojthedonut/tsingress-controller:${{ steps.vars.outputs.TAG }}
+          cache-to: type=local,dest=/home/manojos/cache_for_tailgate_controller,mode=max
+          cache-from: type=local,src=/home/manojos/cache_for_tailgate_controller
+        
