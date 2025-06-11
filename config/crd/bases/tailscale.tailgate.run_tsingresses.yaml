@@ -40,41 +40,49 @@ spec:
             description: TSIngressSpec defines the desired state of TSIngress.
             properties:
               backendService:
-                description: |-
-                  INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-                  Important: Run "make" to regenerate code after modifying this file
+                description: Backend configuration
                 type: string
               dnsName:
                 type: string
               ephemeral:
                 type: boolean
-              foo:
-                description: Foo is an example field of TSIngress. Edit tsingress_types.go
-                  to remove/update
-                type: string
               hostnames:
+                description: DNS and domain configuration
                 items:
                   type: string
                 type: array
-              listenPorts:
+              proxyRules:
+                description: Proxy rules configuration
                 items:
-                  type: integer
+                  description: ProxyRule defines a single proxy forwarding rule
+                  properties:
+                    backendPort:
+                      type: integer
+                    funnel:
+                      type: boolean
+                    listenPort:
+                      type: integer
+                    protocol:
+                      type: string
+                  type: object
                 type: array
-              ports:
-                items:
-                  type: integer
-                type: array
-              protocol:
-                type: string
               subdomain:
                 type: string
               tailnetName:
+                description: Tailscale configuration
                 type: string
               updateDNS:
                 type: boolean
             type: object
           status:
             description: TSIngressStatus defines the observed state of TSIngress.
+            properties:
+              initialized:
+                description: INSERT ADDITIONAL STATUS FIELD - define observed state
+                  of cluster
+                type: boolean
+              state:
+                type: string
             type: object
         type: object
     served: true

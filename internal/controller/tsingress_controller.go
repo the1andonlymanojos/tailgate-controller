@@ -136,55 +136,64 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			}
 			proxyDeploymentName := tsIngress.Name + "-proxy"
 
-			//remove configmap, pvc, deployment
-			err = r.Delete(ctx, &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      proxyDeploymentName + "-config",
-					Namespace: tsIngress.Namespace,
-				},
-			})
-
-			if err != nil {
-				logger.Error(err, "Failed to delete configmap")
-				return ctrl.Result{}, err
-			} else {
+			// Check and delete configmap
+			configMap := &corev1.ConfigMap{}
+			err = r.Get(ctx, types.NamespacedName{
+				Name:      proxyDeploymentName + "-config",
+				Namespace: tsIngress.Namespace,
+			}, configMap)
+			if err == nil {
+				if err := r.Delete(ctx, configMap); err != nil {
+					logger.Error(err, "Failed to delete configmap")
+					return ctrl.Result{}, err
+				}
 				logger.Info("Deleted configmap", "name", proxyDeploymentName+"-config")
+			} else if !apierrors.IsNotFound(err) {
+				logger.Error(err, "Failed to get configmap")
+				return ctrl.Result{}, err
 			}
 
-			err = r.Delete(ctx, &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      proxyDeploymentName + "-state",
-					Namespace: tsIngress.Namespace,
-				},
-			})
-
-			if err != nil {
-				logger.Error(err, "Failed to delete pvc")
-				return ctrl.Result{}, err
-			} else {
+			// Check and delete PVC
+			pvc := &corev1.PersistentVolumeClaim{}
+			err = r.Get(ctx, types.NamespacedName{
+				Name:      proxyDeploymentName + "-state",
+				Namespace: tsIngress.Namespace,
+			}, pvc)
+			if err == nil {
+				if err := r.Delete(ctx, pvc); err != nil {
+					logger.Error(err, "Failed to delete pvc")
+					return ctrl.Result{}, err
+				}
 				logger.Info("Deleted pvc", "name", proxyDeploymentName+"-state")
-			}
-
-			err = r.Delete(ctx, &appsv1.Deployment{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      proxyDeploymentName,
-					Namespace: tsIngress.Namespace,
-				},
-			})
-
-			if err != nil {
-				logger.Error(err, "Failed to delete deployment")
+			} else if !apierrors.IsNotFound(err) {
+				logger.Error(err, "Failed to get pvc")
 				return ctrl.Result{}, err
-			} else {
-				logger.Info("Deleted deployment", "name", proxyDeploymentName)
 			}
 
-			//check dns flag
+			// Check and delete deployment
+			deployment := &appsv1.Deployment{}
+			err = r.Get(ctx, types.NamespacedName{
+				Name:      proxyDeploymentName,
+				Namespace: tsIngress.Namespace,
+			}, deployment)
+			if err == nil {
+				if err := r.Delete(ctx, deployment); err != nil {
+					logger.Error(err, "Failed to delete deployment")
+					return ctrl.Result{}, err
+				}
+				logger.Info("Deleted deployment", "name", proxyDeploymentName)
+			} else if !apierrors.IsNotFound(err) {
+				logger.Error(err, "Failed to get deployment")
+				return ctrl.Result{}, err
+			}
+
+			// Check and delete DNS if enabled
 			if tsIngress.Spec.UpdateDNS {
 				//delete dns
 				err = cloudflare.DeletDNS(ctx, tsIngress.Spec.DNSName, tsIngress.Spec.Domain, tsIngress.Spec.Hostname[0], tsIngress.Spec.TailnetName)
 				if err != nil {
 					logger.Error(err, "Failed to delete dns")
+					// Don't return error here as DNS deletion is not critical
 				}
 			}
 
@@ -204,7 +213,21 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	proxyDeploymentName := tsIngress.Name + "-proxy"
 
-	if !tsIngress.Status.Initialized {
+	//check if proxy deployment exists
+	deploymentExists := false
+	deployment := &appsv1.Deployment{}
+	err = r.Get(ctx, types.NamespacedName{
+		Name:      proxyDeploymentName,
+		Namespace: tsIngress.Namespace,
+	}, deployment)
+
+	if err != nil {
+		logger.Error(err, "Failed to get deployment")
+	} else {
+		deploymentExists = true
+	}
+
+	if !deploymentExists {
 		logger.Info("Proxy deployment not found, creating", "name", proxyDeploymentName)
 
 		//check if tsIngress.Spec.Hostname[0] is already in the tailnet
