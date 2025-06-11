@@ -1,19 +1,21 @@
 # Tailgate Controller
 
-> ⚠️ Ingress is broken. You just didn’t realize it yet.
+> ⚠️ Ingress is broken. You just didn't realize it yet.
 
 ### Why?
 
-If you're running a homelab and want to share access to something, you’ve basically got two options:
+If you're running a homelab and want to share access to something, you've basically got two options:
 
 1. Get a public IP, deal with port forwarding, dynamic DNS, your ISP blocking stuff, or paying extra for a static IP.
 2. Use Tailscale and share access to one of your nodes.
 
-The problem? Sharing a Tailscale node shares *everything* on that machine. Every open port, every service. Yeah, you can do ACLs and routing... *if* you’re on the Pro plan. But most of us are not paying \$5/user/month to share Plex with a friend.
+The problem? Sharing a Tailscale node shares *everything* on that machine. Every open port, every service. Yeah, you can do ACLs and routing... *if* you're on the Pro plan. But most of us are not paying \$5/user/month to share Plex with a friend.
 
-**That’s where Tailgate comes in.**
+**That's where Tailgate comes in.**
 
-This Kubernetes controller gives you a Tailscale node *per-service*, so you can expose *just* the thing you want — and nothing else. Creepy Karthik can watch your Plex, but he’s not getting anywhere near your NAS, dev cluster, or dashboard.
+This Kubernetes controller gives you a Tailscale node *per-service*, so you can expose *just* the thing you want — and nothing else. Creepy Karthik can watch your Plex, but he's not getting anywhere near your NAS, dev cluster, or dashboard.
+
+> 🎯 **Good enough for most people.** We're not trying to be the next enterprise-grade solution here. If you're running a homelab and want to share stuff with friends and family without exposing your entire network, this is probably exactly what you need. Simple, secure, and it just works™.
 
 ---
 
@@ -64,7 +66,7 @@ Also unlike using Funnel directly, Tailgate lets you expose *any* internal port 
 
 ### 1. Plex for Creepy Karthik
 
-Karthik wants to watch movies on your Plex. You’re cool with that. What you’re *not* cool with is him trying to poke around your NAS or Home Assistant setup.
+Karthik wants to watch movies on your Plex. You're cool with that. What you're *not* cool with is him trying to poke around your NAS or Home Assistant setup.
 
 ```yaml
 apiVersion: tailscale.tailgate.run/v1alpha1
@@ -84,11 +86,11 @@ spec:
   tailnetName: your-tailnet.ts.net
 ```
 
-Now he only sees Plex. Even if he gets your login creds, he can’t do anything else — because the *node he sees doesn’t have access to anything else*. Zero-trust, literally.
+Now he only sees Plex. Even if he gets your login creds, he can't do anything else — because the *node he sees doesn't have access to anything else*. Zero-trust, literally.
 
 ### 2. Photo Server for Family
 
-You want to share Immich with your parents. They aren’t installing Tailscale or dealing with VPNs. You just want to send them a link that works.
+You want to share Immich with your parents. They aren't installing Tailscale or dealing with VPNs. You just want to send them a link that works.
 
 ```yaml
 apiVersion: tailscale.tailgate.run/v1alpha1
@@ -108,11 +110,11 @@ spec:
   tailnetName: your-tailnet.ts.net
 ```
 
-With **Funnel** enabled and using one of the public ports (443/8443/10000), they can access your service via a simple link. No VPN, no app install, no tech support required.
+With **Funnel** enabled, Tailscale gives you a publicly accessible link that's proxied through Tailscale's servers directly to your TSIngress for that specific service. No VPN, no app install, no tech support required—just a simple link anyone can use.
 
 ### 3. Dev Access for Contractors
 
-You’ve got external folks who need to hit `dev-api`. You *don’t* want them anywhere near staging, production, or other internal tools.
+You've got external folks who need to hit `dev-api`. You *don't* want them anywhere near staging, production, or other internal tools.
 
 ```yaml
 apiVersion: tailscale.tailgate.run/v1alpha1
@@ -132,7 +134,7 @@ spec:
   tailnetName: your-tailnet.ts.net
 ```
 
-Give them access to that Tailscale node only. Done. They can’t even *see* your other services.
+Give them access to that Tailscale node only. Done. They can't even *see* your other services, or even see what ports you've got open.
 
 ---
 
@@ -159,12 +161,40 @@ Give them access to that Tailscale node only. Done. They can’t even *see* your
 
 ## Installation
 
+First, clone the repository:
+
 ```sh
-helm install tailgate-controller tailgate/tailgate-controller \
+git clone https://github.com/the1andonlymanojos/tailgate-controller.git
+cd tailgate-controller
+```
+
+### Get Tailscale Credentials
+
+1. Go to [Tailscale's OAuth client page](https://login.tailscale.com/admin/authkeys)
+2. Click "Create OAuth Client"
+3. Give it a name (e.g., "Tailgate Controller")
+4. Copy the Client ID and Client Secret
+
+### Get Cloudflare Credentials
+
+1. Go to [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens)
+2. Click "Create Token"
+3. Choose "Edit DNS" template
+4. Set permissions to:
+   - Zone - DNS - Edit
+   - Zone - Zone - Read
+5. Copy the API Token and your Account ID
+
+### Install with Helm
+
+```sh
+helm install tailgate-controller ./dist/chart \
   --namespace tailgate-controller-system \
   --create-namespace \
   --set auth.tailscale.data.TAILSCALE_CLIENT_ID=your-client-id \
-  --set auth.tailscale.data.TAILSCALE_CLIENT_SECRET=your-client-secret
+  --set auth.tailscale.data.TAILSCALE_CLIENT_SECRET=your-client-secret \
+  --set auth.cloudflare.data.CLOUDFLARE_API_TOKEN=your-api-token \
+  --set auth.cloudflare.data.CLOUDFLARE_ACCOUNT_ID=your-account-id
 ```
 
 ---
@@ -224,10 +254,10 @@ helm install tailgate-controller tailgate/tailgate-controller \
 
 ## Contributing
 
-PRs welcome! This is still early days, so expect rough edges. If it’s broken or missing something, open an issue or fix it yourself and send a PR.
+PRs welcome! This is still early days, so expect rough edges. If it's broken or missing something, open an issue or fix it yourself and send a PR.
 
 ---
 
 ## License
 
-Apache 2.0. Use it, fork it, do what you want — just don’t sell it as-is without giving credit.
+Apache 2.0. Use it, fork it, do what you want — just don't sell it as-is without giving credit.
