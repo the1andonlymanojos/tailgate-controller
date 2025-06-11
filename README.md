@@ -49,12 +49,12 @@ Because typical ingress sucks when it comes to security:
 
 Tailgate fixes all of this:
 
-* 🔒 Gives you a *dedicated* Tailscale node per-service
-* 🔌 Only exposes the service you specify — no port scanning, no lateral movement
-* 🧠 Works with the **free** Tailscale plan
-* 🚀 Supports **Funnel** for public access — even if your ISP sucks
-* 💬 No need for complicated ACLs or manual Tailscale node juggling
-* 🎯 Use well-known Funnel ports (443, 8443, or 10000) — works even for Grandma
+* Gives you a *dedicated* Tailscale node per-service
+* Only exposes the service you specify — no port scanning, no lateral movement
+* Works with the **free** Tailscale plan
+* Supports **Funnel** for public access — even if your ISP sucks
+* No need for complicated ACLs or manual Tailscale node juggling
+* Use well-known Funnel ports (443, 8443, or 10000) — works even for Grandma
 
 Also unlike using Funnel directly, Tailgate lets you expose *any* internal port using those limited public ones. So if you've got Redis running on port 6379, you can easily forward it through 443, and on the client just use port 443 — it Just Works™.
 
