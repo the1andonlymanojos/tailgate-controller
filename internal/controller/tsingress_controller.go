@@ -497,7 +497,7 @@ func GenerateConfigFromTSIngress(tsIngress tailscalev1alpha1.TSIngress, authKey 
 	backendAddr := fmt.Sprintf("%s.%s.svc.cluster.local", tsIngress.Spec.BackendService, tsIngress.Namespace)
 
 	for i, port := range listenPorts {
-		fmt.Println("afjdalkfjsdlfsadlkfjdalskjf", backendAddr)
+		fmt.Println("afjdalkfjsdlfsadlkfjkjhgjkhgjhkgjkdalskjf", backendAddr)
 		sb.WriteString(fmt.Sprintf("- protocol: \"%s\"\n  listen_addr: \":%d\"\n  backend_addr: \"%s:%d\"\n  funnel: false\n", protocol, port, backendAddr, ports[i]))
 	}
 
