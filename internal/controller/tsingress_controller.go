@@ -417,9 +417,6 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		// Created successfully, requeue to check status later
 		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
-	} else if err != nil {
-		// Other errors on Get
-		return ctrl.Result{}, err
 	}
 
 	// TODO: Add your core logic here:
