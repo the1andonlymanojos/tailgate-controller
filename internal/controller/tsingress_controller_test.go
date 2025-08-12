@@ -18,17 +18,22 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	intstr "k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tailscalev1alpha1 "github.com/the1andonlymanojos/tailgate-controller/api/v1alpha1"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/the1andonlymanojos/tailgate-controller/internal/tailscale"
 )
 
 var _ = Describe("TSIngress Controller", func() {
@@ -81,6 +86,249 @@ var _ = Describe("TSIngress Controller", func() {
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
 		})
+	})
+})
+
+var _ = Describe("TSIngress Reconcile Behaviors", func() {
+	ctx := context.Background()
+
+	makeService := func(name string, namespace string, ports ...int32) *corev1.Service {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+			},
+			Spec: corev1.ServiceSpec{
+				Ports: []corev1.ServicePort{},
+			},
+		}
+		for i, p := range ports {
+			svc.Spec.Ports = append(svc.Spec.Ports, corev1.ServicePort{
+				Name:       fmt.Sprintf("port-%d-%d", i, p),
+				Port:       p,
+				Protocol:   corev1.ProtocolTCP,
+				TargetPort: intstr.FromInt(int(p)),
+			})
+		}
+		return svc
+	}
+
+	It("adds a finalizer on first reconcile", func() {
+		name := types.NamespacedName{Name: "finalizer-test", Namespace: "default"}
+
+		// Create CR with minimal spec
+		cr := &tailscalev1alpha1.TSIngress{
+			ObjectMeta: metav1.ObjectMeta{Name: name.Name, Namespace: name.Namespace},
+			Spec:       tailscalev1alpha1.TSIngressSpec{},
+		}
+		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+		r := &TSIngressReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+
+		// First reconcile adds finalizer
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+
+		var updated tailscalev1alpha1.TSIngress
+		Expect(k8sClient.Get(ctx, name, &updated)).To(Succeed())
+		Expect(containsString(updated.Finalizers, "tailscale.tailgate.run/finalizer")).To(BeTrue())
+	})
+
+	It("creates ConfigMap, PVC, and Deployment when missing", func() {
+		name := types.NamespacedName{Name: "create-test", Namespace: "default"}
+
+		// Backend service with required ports
+		svc := makeService("backend-svc", name.Namespace, 8080, 9090)
+		Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+
+		// Stub external calls
+		originalMint := mintAuthKeyFn
+		originalGetAll := getAllDevicesFn
+		originalDeleteDevice := deleteDeviceFn
+		originalUpdateDNS := updateDNSFn
+
+		mintAuthKeyFn = func(ctx context.Context, _ *tailscale.TokenCache, _ string, _ string) (string, error) {
+			return "test-auth-key", nil
+		}
+		getAllDevicesFn = func(ctx context.Context, _ *tailscale.TokenCache, _ string) ([]tailscale.Device, error) {
+			return []tailscale.Device{}, nil
+		}
+		deleteDeviceFn = func(ctx context.Context, _ *tailscale.TokenCache, _ string) error { return nil }
+		updateDNSFn = func(ctx context.Context, _, _, _, _ string) error { return nil }
+		defer func() {
+			mintAuthKeyFn = originalMint
+			getAllDevicesFn = originalGetAll
+			deleteDeviceFn = originalDeleteDevice
+			updateDNSFn = originalUpdateDNS
+		}()
+
+		cr := &tailscalev1alpha1.TSIngress{
+			ObjectMeta: metav1.ObjectMeta{Name: name.Name, Namespace: name.Namespace},
+			Spec: tailscalev1alpha1.TSIngressSpec{
+				BackendService: svc.Name,
+				Hostname:       []string{"create-test-host"},
+				TailnetName:    "example.ts.net",
+				UpdateDNS:      false,
+				ProxyRules: []tailscalev1alpha1.ProxyRule{
+					{Protocol: "tcp", ListenPort: 443, BackendPort: 8080, Funnel: true},
+					{Protocol: "tcp", ListenPort: 80, BackendPort: 9090, Funnel: false},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+		r := &TSIngressReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+
+		// First reconcile adds finalizer
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+		// Second reconcile creates resources
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+
+		// Assert ConfigMap
+		var cm corev1.ConfigMap
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name + "-proxy-config", Namespace: name.Namespace}, &cm)).To(Succeed())
+		Expect(cm.Data).To(HaveKey("tailgate.yaml"))
+		Expect(cm.Data["tailgate.yaml"]).To(ContainSubstring("auth_key: \"test-auth-key\""))
+
+		// Assert PVC
+		var pvc corev1.PersistentVolumeClaim
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name + "-proxy-state", Namespace: name.Namespace}, &pvc)).To(Succeed())
+
+		// Assert Deployment exists
+		var deploy appsv1.Deployment
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name + "-proxy", Namespace: name.Namespace}, &deploy)).To(Succeed())
+	})
+
+	It("fails when backend port is not present on the Service", func() {
+		name := types.NamespacedName{Name: "port-validate-test", Namespace: "default"}
+
+		// Service only exposes 8080
+		svc := makeService("backend-svc-port", name.Namespace, 8080)
+		Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+
+		// Stub external calls (won't be reached if validation fails but keep safe)
+		originalMint := mintAuthKeyFn
+		originalGetAll := getAllDevicesFn
+		mintAuthKeyFn = func(ctx context.Context, _ *tailscale.TokenCache, _ string, _ string) (string, error) { return "", nil }
+		getAllDevicesFn = func(ctx context.Context, _ *tailscale.TokenCache, _ string) ([]tailscale.Device, error) {
+			return nil, nil
+		}
+		defer func() {
+			mintAuthKeyFn = originalMint
+			getAllDevicesFn = originalGetAll
+		}()
+
+		cr := &tailscalev1alpha1.TSIngress{
+			ObjectMeta: metav1.ObjectMeta{Name: name.Name, Namespace: name.Namespace},
+			Spec: tailscalev1alpha1.TSIngressSpec{
+				BackendService: svc.Name,
+				Hostname:       []string{"port-validate-host"},
+				TailnetName:    "example.ts.net",
+				ProxyRules: []tailscalev1alpha1.ProxyRule{
+					{Protocol: "tcp", ListenPort: 443, BackendPort: 9090, Funnel: true}, // 9090 missing on service
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+		r := &TSIngressReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+
+		// First reconcile adds finalizer
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+		// Second reconcile should error due to invalid backend port
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("cleans up resources and removes finalizer on delete", func() {
+		name := types.NamespacedName{Name: "delete-test", Namespace: "default"}
+
+		svc := makeService("backend-svc-del", name.Namespace, 8080)
+		Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+
+		// Stub external calls
+		originalMint := mintAuthKeyFn
+		originalGetAll := getAllDevicesFn
+		originalDelete := deleteDeviceFn
+		originalDeleteDNS := deleteDNSFn
+		originalUpdateDNS := updateDNSFn
+		var deletedIDs []string
+		var deleteDNSCalled bool
+
+		mintAuthKeyFn = func(ctx context.Context, _ *tailscale.TokenCache, _ string, _ string) (string, error) {
+			return "auth", nil
+		}
+		getAllDevicesFn = func(ctx context.Context, _ *tailscale.TokenCache, _ string) ([]tailscale.Device, error) {
+			return []tailscale.Device{{NodeID: "node-1", Hostname: "delete-host"}}, nil
+		}
+		deleteDeviceFn = func(ctx context.Context, _ *tailscale.TokenCache, deviceID string) error {
+			deletedIDs = append(deletedIDs, deviceID)
+			return nil
+		}
+		deleteDNSFn = func(ctx context.Context, _, _, _, _ string) error {
+			deleteDNSCalled = true
+			return nil
+		}
+		updateDNSFn = func(ctx context.Context, _, _, _, _ string) error { return nil }
+		defer func() {
+			mintAuthKeyFn = originalMint
+			getAllDevicesFn = originalGetAll
+			deleteDeviceFn = originalDelete
+			deleteDNSFn = originalDeleteDNS
+			updateDNSFn = originalUpdateDNS
+		}()
+
+		cr := &tailscalev1alpha1.TSIngress{
+			ObjectMeta: metav1.ObjectMeta{Name: name.Name, Namespace: name.Namespace},
+			Spec: tailscalev1alpha1.TSIngressSpec{
+				BackendService: svc.Name,
+				Hostname:       []string{"delete-host"},
+				TailnetName:    "example.ts.net",
+				UpdateDNS:      true,
+				ProxyRules:     []tailscalev1alpha1.ProxyRule{{Protocol: "tcp", ListenPort: 443, BackendPort: 8080, Funnel: true}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+		r := &TSIngressReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+
+		// First to add finalizer, second to create resources
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+
+		// Delete CR to trigger finalizer
+		var fetched tailscalev1alpha1.TSIngress
+		Expect(k8sClient.Get(ctx, name, &fetched)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, &fetched)).To(Succeed())
+
+		// Run reconcile on deletion path (may require more than once)
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+		// Trigger another reconcile to let deletion settle
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+		Expect(err).NotTo(HaveOccurred())
+
+		// External cleanup expected
+		Expect(deletedIDs).To(ContainElement("node-1"))
+		Expect(deleteDNSCalled).To(BeTrue())
+
+		// CR should eventually be deleted or at least have the finalizer removed
+		Eventually(func() bool {
+			var obj tailscalev1alpha1.TSIngress
+			err := k8sClient.Get(ctx, name, &obj)
+			if errors.IsNotFound(err) {
+				return true
+			}
+			if err != nil {
+				return false
+			}
+			return !containsString(obj.Finalizers, "tailscale.tailgate.run/finalizer")
+		}, 15*time.Second, 200*time.Millisecond).Should(BeTrue())
 	})
 })
 

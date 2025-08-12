@@ -82,11 +82,19 @@ type TSIngressStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	Initialized bool   `json:"initialized,omitempty"`
 	State       string `json:"state,omitempty"`
+	// Standard Kubernetes conditions (e.g., Ready, Degraded, Progressing)
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=.status.state
+// +kubebuilder:printcolumn:name="Initialized",type=boolean,JSONPath=.status.initialized
+// +kubebuilder:printcolumn:name="Host",type=string,JSONPath=.spec.hostnames[0]
+// +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=.spec.backendService
+// +kubebuilder:printcolumn:name="DNS",type=string,JSONPath=.spec.dnsName
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 
 // TSIngress is the Schema for the tsingresses API.
 type TSIngress struct {

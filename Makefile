@@ -80,6 +80,27 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 	KIND_CLUSTER=$(KIND_CLUSTER) go test ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
+.PHONY: create-e2e-secrets
+create-e2e-secrets: ## Create required secrets in the e2e namespace using env vars
+	@if [ -z "$$TAILSCALE_CLIENT_ID" ] || [ -z "$$TAILSCALE_CLIENT_SECRET" ]; then \
+	  echo "TAILSCALE_CLIENT_ID and TAILSCALE_CLIENT_SECRET must be set in the environment"; \
+	  exit 1; \
+	fi
+	@kubectl create ns tailgate-controller-system --dry-run=client -o yaml | kubectl apply -f -
+	@kubectl -n tailgate-controller-system delete secret tailscale-auth --ignore-not-found
+	@kubectl -n tailgate-controller-system create secret generic tailscale-auth \
+	  --from-literal=TAILSCALE_CLIENT_ID=$$TAILSCALE_CLIENT_ID \
+	  --from-literal=TAILSCALE_CLIENT_SECRET=$$TAILSCALE_CLIENT_SECRET
+	@kubectl -n tailgate-controller-system delete secret cloudflare-auth --ignore-not-found
+	@kubectl -n tailgate-controller-system create secret generic cloudflare-auth \
+	  --from-literal=CLOUDFLARE_API_KEY=$${CLOUDFLARE_API_KEY:-dummy} \
+	  --from-literal=CLOUDFLARE_ZONE_ID=$${CLOUDFLARE_ZONE_ID:-dummy}
+
+.PHONY: delete-e2e-secrets
+delete-e2e-secrets: ## Delete e2e secrets from the namespace
+	@kubectl -n tailgate-controller-system delete secret tailscale-auth --ignore-not-found
+	@kubectl -n tailgate-controller-system delete secret cloudflare-auth --ignore-not-found
+
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)

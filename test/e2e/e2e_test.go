@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -69,6 +70,14 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+
+		By("verifying secrets are present for the controller")
+		cmd = exec.Command("kubectl", "-n", namespace, "get", "secret", "tailscale-auth")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "tailscale-auth secret missing")
+		cmd = exec.Command("kubectl", "-n", namespace, "get", "secret", "cloudflare-auth")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "cloudflare-auth secret missing")
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
@@ -266,6 +275,87 @@ var _ = Describe("Manager", Ordered, func() {
 		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
 		//    strings.ToLower(<Kind>),
 		// ))
+	})
+
+	It("should reconcile a TSIngress end-to-end", func() {
+		By("creating a backend service and deployment")
+		// Simple nginx backend
+		backend := `
+		apiVersion: apps/v1
+		kind: Deployment
+		metadata:
+		  name: test-backend
+		  namespace: tailgate-controller-system
+		spec:
+		  replicas: 1
+		  selector:
+		    matchLabels:
+		      app: test-backend
+		  template:
+		    metadata:
+		      labels:
+		        app: test-backend
+		    spec:
+		      containers:
+		      - name: nginx
+		        image: nginx:1.25
+		        ports:
+		        - containerPort: 80
+		---
+		apiVersion: v1
+		kind: Service
+		metadata:
+		  name: test-backend
+		  namespace: tailgate-controller-system
+		spec:
+		  selector:
+		    app: test-backend
+		  ports:
+		  - name: http
+		    port: 8080
+		    targetPort: 80
+		`
+		cmd := exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(backend)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "failed to apply backend")
+
+		By("applying a TSIngress resource")
+		ing := `
+		apiVersion: tailscale.tailgate.run/v1alpha1
+		kind: TSIngress
+		metadata:
+		  name: e2e-sample
+		  namespace: tailgate-controller-system
+		spec:
+		  backendService: test-backend
+		  proxyRules:
+		  - protocol: tcp
+		    listenPort: 443
+		    backendPort: 8080
+		    funnel: false
+		  hostnames:
+		  - e2e-sample
+		  tailnetName: example.ts.net
+		`
+		cmd = exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(ing)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "failed to apply TSIngress")
+
+		By("waiting for the controller to create dependent resources")
+		verify := func(g Gomega) {
+			cmd = exec.Command("kubectl", "get", "cm", "e2e-sample-proxy-config", "-n", namespace)
+			_, err = utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			cmd = exec.Command("kubectl", "get", "pvc", "e2e-sample-proxy-state", "-n", namespace)
+			_, err = utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			cmd = exec.Command("kubectl", "get", "deploy", "e2e-sample-proxy", "-n", namespace)
+			_, err = utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+		}
+		Eventually(verify, 5*time.Minute, 5*time.Second).Should(Succeed())
 	})
 })
 
