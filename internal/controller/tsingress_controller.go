@@ -471,13 +471,15 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			ObservedGeneration: tsIngress.GetGeneration(),
 		})
 	}
-	tsIngress.Status.Initialized = true
-	tsIngress.Status.State = "Ready"
-	setCondition("Ready", metav1.ConditionTrue, "ReconcileSuccess", "Resources are in desired state")
-	if err := r.Status().Update(ctx, &tsIngress); err != nil {
-		logger.Error(err, "failed to update status")
-		// Do not fail reconciliation solely on status update failure
-	}
+    // Use a status patch to avoid conflicts
+    statusBase := tsIngress.DeepCopy()
+    tsIngress.Status.Initialized = true
+    tsIngress.Status.State = "Ready"
+    setCondition("Ready", metav1.ConditionTrue, "ReconcileSuccess", "Resources are in desired state")
+    if err := r.Status().Patch(ctx, &tsIngress, client.MergeFrom(statusBase)); err != nil {
+        logger.Error(err, "failed to update status")
+        // Do not fail reconciliation solely on status update failure
+    }
 
 	logger.Info("reconcile success")
 	return ctrl.Result{}, nil
@@ -570,18 +572,20 @@ func sha256Hex(s string) string {
 
 // setStatus updates status.State and the Ready condition defensively.
 func (r *TSIngressReconciler) setStatus(ctx context.Context, obj *tailscalev1alpha1.TSIngress, state string, condStatus metav1.ConditionStatus, reason, message string) {
-	obj.Status.State = state
-	if state == "Ready" {
-		obj.Status.Initialized = true
-	}
-	meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             condStatus,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: obj.GetGeneration(),
-	})
-	_ = r.Status().Update(ctx, obj)
+    // Patch status from a clean base to minimize conflicts
+    base := obj.DeepCopy()
+    obj.Status.State = state
+    if state == "Ready" {
+        obj.Status.Initialized = true
+    }
+    meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
+        Type:               "Ready",
+        Status:             condStatus,
+        Reason:             reason,
+        Message:            message,
+        ObservedGeneration: obj.GetGeneration(),
+    })
+    _ = r.Status().Patch(ctx, obj, client.MergeFrom(base))
 }
 
 /*

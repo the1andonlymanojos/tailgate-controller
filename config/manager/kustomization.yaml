@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: manojthedonut/tsingress-controller
-  newTag: 20250612-ac4e6b0
+  newTag: 20250813-f722c29
