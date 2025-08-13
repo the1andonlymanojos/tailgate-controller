@@ -57,7 +57,7 @@ func UpdateDNS(ctx context.Context, dnsName string, domain string, hostname stri
 	req.Header.Set("Authorization", authHeader)
 
 	resp, err := client.Do(req)
-	//fmt.Println("resp: ", resp)
+	fmt.Println("resp: ", resp)
 	if err != nil {
 		return fmt.Errorf("failed to fetch existing records: %w", err)
 	}
