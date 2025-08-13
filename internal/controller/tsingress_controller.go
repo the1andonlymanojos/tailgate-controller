@@ -23,6 +23,9 @@ import (
 	"fmt"
 	"strings"
 
+	tailscalev1alpha1 "github.com/the1andonlymanojos/tailgate-controller/api/v1alpha1"
+	"github.com/the1andonlymanojos/tailgate-controller/internal/cloudflare"
+	"github.com/the1andonlymanojos/tailgate-controller/internal/tailscale"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,10 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-
-	tailscalev1alpha1 "github.com/the1andonlymanojos/tailgate-controller/api/v1alpha1"
-	"github.com/the1andonlymanojos/tailgate-controller/internal/cloudflare"
-	"github.com/the1andonlymanojos/tailgate-controller/internal/tailscale"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // Function variables to allow stubbing in tests
@@ -471,15 +471,15 @@ func (r *TSIngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			ObservedGeneration: tsIngress.GetGeneration(),
 		})
 	}
-    // Use a status patch to avoid conflicts
-    statusBase := tsIngress.DeepCopy()
-    tsIngress.Status.Initialized = true
-    tsIngress.Status.State = "Ready"
-    setCondition("Ready", metav1.ConditionTrue, "ReconcileSuccess", "Resources are in desired state")
-    if err := r.Status().Patch(ctx, &tsIngress, client.MergeFrom(statusBase)); err != nil {
-        logger.Error(err, "failed to update status")
-        // Do not fail reconciliation solely on status update failure
-    }
+	// Use a status patch to avoid conflicts
+	statusBase := tsIngress.DeepCopy()
+	tsIngress.Status.Initialized = true
+	tsIngress.Status.State = "Ready"
+	setCondition("Ready", metav1.ConditionTrue, "ReconcileSuccess", "Resources are in desired state")
+	if err := r.Status().Patch(ctx, &tsIngress, client.MergeFrom(statusBase)); err != nil {
+		logger.Error(err, "failed to update status")
+		// Do not fail reconciliation solely on status update failure
+	}
 
 	logger.Info("reconcile success")
 	return ctrl.Result{}, nil
@@ -512,6 +512,7 @@ func removeString(slice []string, s string) []string {
 func (r *TSIngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tailscalev1alpha1.TSIngress{}).
+		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Named("tsingress").
 		Complete(r)
 }
@@ -572,20 +573,18 @@ func sha256Hex(s string) string {
 
 // setStatus updates status.State and the Ready condition defensively.
 func (r *TSIngressReconciler) setStatus(ctx context.Context, obj *tailscalev1alpha1.TSIngress, state string, condStatus metav1.ConditionStatus, reason, message string) {
-    // Patch status from a clean base to minimize conflicts
-    base := obj.DeepCopy()
-    obj.Status.State = state
-    if state == "Ready" {
-        obj.Status.Initialized = true
-    }
-    meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
-        Type:               "Ready",
-        Status:             condStatus,
-        Reason:             reason,
-        Message:            message,
-        ObservedGeneration: obj.GetGeneration(),
-    })
-    _ = r.Status().Patch(ctx, obj, client.MergeFrom(base))
+	obj.Status.State = state
+	if state == "Ready" {
+		obj.Status.Initialized = true
+	}
+	meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             condStatus,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: obj.GetGeneration(),
+	})
+	_ = r.Status().Update(ctx, obj)
 }
 
 /*
